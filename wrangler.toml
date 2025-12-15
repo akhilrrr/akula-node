@@ -9,8 +9,11 @@ main = "report-processor.js"
 # Compatibility date is required and specifies which features your worker supports
 compatibility_date = "2025-12-16" 
 
-# --- D1 Database Binding (CRITICAL FOR YOUR REPORTING) ---
+# --- D1 Database Binding (CRITICAL FIX) ---
 [[ d1_databases ]]
-binding = "DB" # This is the variable name you use in your Worker code (e.g., env.DB)
-database_name = "akula_events" # The name you gave your D1 database instance
-database_id = "51482f5b-a519-40d9-b8a7-f1df618c2a11" # You MUST replace this ID
+# 'binding' MUST match the variable name in report-processor.js (env.DB)
+binding = "DB" 
+# 'database_name' MUST match the name of the D1 database you created in the Cloudflare Dashboard
+database_name = "akula_events"
+
+# database_id = "51482f5b-a519-40d9-b8a7-f1df618c2a11" # You MUST replace this ID
