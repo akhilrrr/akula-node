@@ -7,7 +7,7 @@ name = "akula-report-endpoint"
 main = "report-processor.js" 
 
 # Compatibility date is required and specifies which features your worker supports
-compatibility_date = "2025-12-16" 
+compatibility_date = "2025-12-15" 
 
 # --- D1 Database Binding (CRITICAL FIX) ---
 [[ d1_databases ]]
