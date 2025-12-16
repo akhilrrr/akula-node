@@ -1,12 +1,14 @@
+
 {
   "name": "akula-node",
   "version": "1.0.0",
   "scripts": {
     "build": "npm install && npm run build:js && npm run copy:assets",
     "build:js": "npx terser src/blocker.js --config-file build.json --output dist/blocker.js",
-    "copy:assets": "cp signatures.json dist/signatures.json && cp -R configs dist/configs"
+    "copy:assets": "npx copyfiles -u 1 src/signatures.json src/configs/**/* dist"
   },
   "devDependencies": {
-    "terser": "^5.28.1"
+    "terser": "^5.28.1",
+    "copyfiles": "^2.4.1"
   }
 }
