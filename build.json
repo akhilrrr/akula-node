@@ -1,0 +1,14 @@
+{
+  "compress": {
+    "dead_code": true,
+    "drop_console": true,
+    "drop_debugger": true,
+    "passes": 2
+  },
+  "mangle": {
+    "toplevel": true
+  },
+  "format": {
+    "comments": false
+  }
+}

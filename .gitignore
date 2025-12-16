@@ -3,3 +3,12 @@ x._____________backup/
 
 # local scraping workspace
 x._____________scrape/
+
+# Development and Build Dependencies
+/node_modules
+/dist
+/src
+
+# Cloudflare Secrets/Caches (DO NOT COMMIT)
+.env
+.wrangler
