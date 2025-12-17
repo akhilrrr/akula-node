@@ -2,7 +2,7 @@
   "clientId": "AKSTCLAMIKA",
   "domain": "amika-store.com",
   "enabled": true,
-  "mode": "block", 
+  "mode": "report-only", 
   "layers": {
     "static": true,
     "domShield": true,
@@ -19,7 +19,7 @@
     "globals": ["Shopify", "jQuery"]
   },
   "reporting": {
-    "endpoint": "",
+    "endpoint": "https://akula-report-endpoint.zoetehemel.workers.dev/report",
     "batchIntervalMs": 10000,
     "sampleRate": 1.0
   }
