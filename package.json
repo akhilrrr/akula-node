@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "scripts": {
     "build": "npm install && npm run build:js && npm run copy:assets",
-    "build:js": "npx terser src/blocker.js --config-file build.json --output dist/blocker.js",
+    "build:js": "npx terser src/blocker.js --config-file build.json --compress --mangle --output dist/blocker.js",
     "copy:assets": "npx copyfiles -u 1 src/signatures.json src/configs/**/* dist"
   },
   "devDependencies": {

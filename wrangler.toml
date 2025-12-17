@@ -1,19 +1,17 @@
 # wrangler.toml - Cloudflare Worker Configuration
 
-# The name of your worker (This will be part of the URL)
+# The name of your worker
 name = "akula-report-endpoint"
 
-# The path to your main Worker code file (You must create this file!)
+# The path to your main Worker code file
 main = "report-processor.js" 
 
-# Compatibility date is required and specifies which features your worker supports
+# Compatibility date
 compatibility_date = "2025-12-15" 
 
-# --- D1 Database Binding (CRITICAL FIX) ---
 [[ d1_databases ]]
-# 'binding' MUST match the variable name in report-processor.js (env.DB)
+# 'binding' MUST match the variable name in report-processor.js
 binding = "DB" 
 # 'database_name' MUST match the name of the D1 database you created in the Cloudflare Dashboard
 database_name = "akula_events"
-
-# database_id = "51482f5b-a519-40d9-b8a7-f1df618c2a11" # You MUST replace this ID
+database_id = "51482f5b-a519-40d9-b8a7-f1df618c2a11"
