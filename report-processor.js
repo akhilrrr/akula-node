@@ -1,11 +1,11 @@
 /**
  * Cloudflare Worker for Akula Node Service.
+ * Enterprise Version: Live D1 Logging + Live Google Sheets Prepend
  */
 
 export default {
     async fetch(request, env, ctx) {
-        // --- Handle CORS Preflight ---
-        // This is necessary so the browser (Shopify) is allowed to send data to your worker
+        // Handle CORS Preflight
         if (request.method === "OPTIONS") {
             return new Response(null, {
                 headers: {
@@ -17,131 +17,121 @@ export default {
         }
 
         const url = new URL(request.url);
-
         if (url.pathname === '/report' && request.method === 'POST') {
-            return handleIncomingReport(request, env);
+            return handleIncomingReport(request, env, ctx);
         }
 
-        return new Response('Akula Node Service is Live.', { status: 200 });
-    },
-
-    async scheduled(event, env, ctx) {
-        console.log('Daily report scheduler triggered.');
-        ctx.waitUntil(runDailyAggregation(env)); 
+        return new Response('Akula Node Live.', { status: 200 });
     }
 };
 
-// --- Report Insertion Logic ---
-
-async function handleIncomingReport(request, env) {
+async function handleIncomingReport(request, env, ctx) {
     try {
         const data = await request.json();
         const events = data.events || [];
-        
-        // --- FIX 1: Corrected Syntax (Removed double {) ---
-        if (!data.clientId || events.length === 0) {
-             return new Response('Invalid report: Missing client or events.', { status: 400 });
-        }
-        
-        const db = env.DB; 
-        const statements = [];
+        const clientId = data.clientId;
 
-        // --- FIX 2: Session ID Logic ---
-        // Your blocker.js sends session_id INSIDE each event, not at the top level.
-        // We pull it from the first event to use in our database row.
-        const backupSessionId = events[0].session_id || "unknown_session";
-
-        for (const event of events) {
-            let urlPath = null;
-            let signatureId = null;
-            
-            try {
-                const parsedUrl = new URL(event.url);
-                urlPath = parsedUrl.pathname;
-            } catch (e) {
-                urlPath = event.url ? event.url.substring(0, 255) : "unknown_path"; 
-            }
-            
-            if (event.details && typeof event.details === 'object' && event.details.signature_id) {
-                signatureId = event.details.signature_id;
-            }
-
-            const sql = `
-                INSERT INTO akula_events 
-                (id, ts, client_id, session_id, type, action, path, signature_id, details) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `;
-
-            statements.push(db.prepare(sql).bind(
-                crypto.randomUUID(),           // 1. id
-                event.ts,                      // 2. ts
-                data.clientId,                 // 3. client_id
-                event.session_id || backupSessionId, // 4. session_id (pulled from event)
-                event.type,                    // 5. type
-                event.action,                  // 6. action
-                urlPath,                       // 7. path
-                signatureId,                   // 8. signature_id
-                JSON.stringify(event.details)  // 9. details
-            ));
+        if (!clientId || events.length === 0) {
+            return new Response('Invalid report.', { status: 400 });
         }
 
-        if (statements.length > 0) {
-            await db.batch(statements);
-        }
-
-        return new Response('Reports received.', { 
-            status: 200,
-            headers: { "Access-Control-Allow-Origin": "*" } // Support CORS
-        });
-    } catch (e) {
-        console.error('Report handling failed:', e);
-        return new Response(`Internal Error: ${e.message}`, { status: 500 });
-    }
-}
-
-// --- Daily Aggregation (Stays the same for now) ---
-async function getClientIDs(env) {
-    const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
-    const result = await env.DB.prepare(
-        "SELECT DISTINCT client_id FROM akula_events WHERE ts >= ?"
-    ).bind(oneDayAgo).all();
-    return result.results ? result.results.map(row => row.client_id) : [];
-}
-
-async function runDailyAggregation(env) {
-    const db = env.DB;
-    const clientIDs = await getClientIDs(env);
-    const endTime = Date.now();
-    const startTime = endTime - (24 * 60 * 60 * 1000); 
-
-    const finalReports = [];
-
-    for (const clientId of clientIDs) {
-        const sql = `
-            SELECT
-                type,
-                COUNT(*) AS count_by_type,
-                (CAST(COUNT(*) AS REAL) * 100.0) / (
-                    SELECT COUNT(*)
-                    FROM akula_events
-                    WHERE client_id = ?1 AND action = 'blocked' AND ts >= ?2 AND ts < ?3
-                ) AS percentage
-            FROM akula_events
-            WHERE client_id = ?1 AND action = 'blocked' AND ts >= ?2 AND ts < ?3
-            GROUP BY type
-            ORDER BY percentage DESC;
-        `;
-
-        try {
-            const reportResult = await db.prepare(sql).bind(clientId, startTime, endTime).all();
-            finalReports.push({
+        // 1. LOG TO D1 (Your "Solid Data" for 45 days)
+        const statements = events.map(event => {
+            const urlPath = new URL(event.url).pathname || "/";
+            return env.DB.prepare(`
+                INSERT INTO akula_events (id, ts, client_id, session_id, type, action, path, details)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            `).bind(
+                crypto.randomUUID(),
+                event.ts,
                 clientId,
-                reportDate: new Date(endTime).toISOString(),
-                metrics: reportResult.results
-            });
-        } catch (error) {
-            console.error(`Error for ${clientId}:`, error);
-        }
+                event.session_id,
+                event.type,
+                event.action,
+                urlPath,
+                JSON.stringify(event.details)
+            );
+        });
+
+        // Execute D1 Batch
+        await env.DB.batch(statements);
+
+        // 2. PUSH TO GOOGLE SHEETS (Live Signal Feed)
+        // We use ctx.waitUntil so the browser doesn't have to wait for Google Sheets to finish
+        ctx.waitUntil(pushToGoogleSheets(events, clientId, env));
+
+        return new Response('Processed.', { 
+            status: 200, 
+            headers: { "Access-Control-Allow-Origin": "*" } 
+        });
+
+    } catch (e) {
+        return new Response(`Error: ${e.message}`, { status: 500 });
     }
-    console.log('Aggregation Complete:', JSON.stringify(finalReports));
+}
+
+async function pushToGoogleSheets(events, clientId, env) {
+    try {
+        const token = await getGoogleToken(env);
+        // Note: You should have SPREADSHEET_ID in your wrangler.toml or secrets
+        const spreadsheetId = env.SPREADSHEET_ID; 
+
+        // Transform events into Enterprise Signal Rows
+        const rows = events.map(e => {
+            let severity = "🟡 MEDIUM";
+            let vector = "Heuristic Engine";
+            
+            if (e.type.includes('src_match') || e.type.includes('id_match')) {
+                severity = "🔴 HIGH";
+                vector = "Signature Match";
+            } else if (e.type.includes('global_var')) {
+                severity = "🔵 INFO";
+                vector = "Environment Scan";
+            }
+
+            return [
+                new Date(e.ts).toISOString().replace('T', ' ').substring(0, 19), // Time
+                severity,                                                      // Severity
+                vector,                                                        // Threat Vector
+                e.type.toUpperCase().replace(/_/g, ' '),                        // Signal
+                new URL(e.url).pathname,                                       // Resource Path
+                JSON.stringify(e.details).substring(0, 200)                    // Forensic Evidence
+            ];
+        });
+
+        // Google Sheets API: BatchUpdate to INSERT rows at the top (Prepend)
+        await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`, {
+            method: "POST",
+            headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+            body: JSON.stringify({
+                requests: [
+                    {
+                        insertDimension: {
+                            range: { sheetId: 0, dimension: "ROWS", startIndex: 1, endIndex: 1 + rows.length },
+                            inheritFromBefore: false
+                        }
+                    },
+                    {
+                        updateCells: {
+                            rows: rows.map(r => ({
+                                values: r.map(v => ({ userEnteredValue: { stringValue: String(v) } }))
+                            })),
+                            fields: "userEnteredValue",
+                            start: { sheetId: 0, rowIndex: 1, columnIndex: 0 }
+                        }
+                    }
+                ]
+            })
+        });
+    } catch (err) {
+        console.error("Sheets Sync Failed:", err);
+    }
+}
+
+// Helper to get Google OAuth Token (Assumes you have service account credentials in env)
+async function getGoogleToken(env) {
+    // This part depends on your specific Auth setup (Service Account vs OAuth)
+    // For now, I'm assuming you have a functional getGoogleToken logic
+    // If not, let me know and I'll provide the Service Account Auth code.
+    return env.GOOGLE_ACCESS_TOKEN; 
 }
