@@ -5,23 +5,57 @@
 
 export default {
     async fetch(request, env, ctx) {
-        // Handle CORS Preflight
+        const url = new URL(request.url);
+
+        // --- LAYER 1: Handle the "Bridge" (GET request for Google Sheets) ---
+        if (request.method === "GET" && url.pathname === '/get-client-data') {
+            const clientId = url.searchParams.get('clientId');
+            const key = url.searchParams.get('key');
+            const SECRET_KEY = "thecakeisicy09"; // Must match your formula
+
+            if (key !== SECRET_KEY) {
+                return new Response("Unauthorized", { status: 401 });
+            }
+
+            // Get only the last 24 hours of data
+            const oneDayAgo = Date.now() - (24 * 60 * 60 * 1000);
+
+            const { results } = await env.DB.prepare(`
+                SELECT ts, type, action, path 
+                FROM akula_events 
+                WHERE client_id = ? AND ts >= ?
+                ORDER BY ts DESC
+            `).bind(clientId, oneDayAgo).all();
+
+            // Convert results to CSV format for Google Sheets
+            let csv = "Time,Threat Type,Action,Page Path\n";
+            results.forEach(row => {
+                const time = new Date(row.ts).toLocaleString();
+                csv += `"${time}","${row.type}","${row.action}","${row.path}"\n`;
+            });
+
+            return new Response(csv, {
+                headers: { "Content-Type": "text/csv" }
+            });
+        }
+
+        // --- LAYER 2: Handle Incoming Reports (POST request from blocker.js) ---
+        if (request.method === "POST" && url.pathname === '/report') {
+            return handleIncomingReport(request, env, ctx);
+        }
+
+        // --- LAYER 3: CORS Preflight ---
         if (request.method === "OPTIONS") {
             return new Response(null, {
                 headers: {
                     "Access-Control-Allow-Origin": "*",
-                    "Access-Control-Allow-Methods": "POST, OPTIONS",
+                    "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
                     "Access-Control-Allow-Headers": "Content-Type",
                 },
             });
         }
 
-        const url = new URL(request.url);
-        if (url.pathname === '/report' && request.method === 'POST') {
-            return handleIncomingReport(request, env, ctx);
-        }
-
-        return new Response('Akula Node Live.', { status: 200 });
+        return new Response('Akula Node Active.', { status: 200 });
     }
 };
 
