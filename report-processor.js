@@ -1,6 +1,6 @@
 /**
- * Cloudflare Worker for Akula Node Service.
- * Enterprise Version: Live D1 Logging + Live Google Sheets Prepend
+ * Akula Node - Cloudflare Worker (D1 + CSV Bridge)
+ * Handles incoming threat reports and provides a 24h CSV feed for Google Sheets.
  */
 
 export default {
@@ -11,32 +11,43 @@ export default {
         if (request.method === "GET" && url.pathname === '/get-client-data') {
             const clientId = url.searchParams.get('clientId');
             const key = url.searchParams.get('key');
-            const SECRET_KEY = "theCakeisicy09"; // Must match your formula
+            const SECRET_KEY = "theCakeisicy09"; // Your Master Password
 
             if (key !== SECRET_KEY) {
                 return new Response("Unauthorized", { status: 401 });
             }
 
-            // Get only the last 24 hours of data
-            const oneDayAgo = Date.now() - (24 * 60 * 60 * 1000);
+            try {
+                // Get only the last 24 hours of data
+                const oneDayAgo = Date.now() - (24 * 60 * 60 * 1000);
 
-            const { results } = await env.DB.prepare(`
-                SELECT ts, type, action, path 
-                FROM akula_events 
-                WHERE client_id = ? AND ts >= ?
-                ORDER BY ts DESC
-            `).bind(clientId, oneDayAgo).all();
+                const { results } = await env.DB.prepare(`
+                    SELECT ts, type, action, path 
+                    FROM akula_events 
+                    WHERE client_id = ? AND ts >= ?
+                    ORDER BY ts DESC
+                `).bind(clientId, oneDayAgo).all();
 
-            // Convert results to CSV format for Google Sheets
-            let csv = "Time,Threat Type,Action,Page Path\n";
-            results.forEach(row => {
-                const time = new Date(row.ts).toLocaleString();
-                csv += `"${time}","${row.type}","${row.action}","${row.path}"\n`;
-            });
+                // Build CSV format
+                let csv = "Time,Threat Type,Action,Page Path\n";
+                if (results && results.length > 0) {
+                    results.forEach(row => {
+                        const time = new Date(row.ts).toLocaleString('en-US', { hour12: true });
+                        csv += `"${time}","${row.type.toUpperCase()}","${row.action}","${row.path}"\n`;
+                    });
+                } else {
+                    csv += "No Data,Secure,Secure,/\n";
+                }
 
-            return new Response(csv, {
-                headers: { "Content-Type": "text/csv" }
-            });
+                return new Response(csv, {
+                    headers: { 
+                        "Content-Type": "text/csv; charset=utf-8",
+                        "Access-Control-Allow-Origin": "*" // Allows Google Sheets to fetch
+                    }
+                });
+            } catch (e) {
+                return new Response("Database Error: " + e.message, { status: 500 });
+            }
         }
 
         // --- LAYER 2: Handle Incoming Reports (POST request from blocker.js) ---
@@ -44,7 +55,7 @@ export default {
             return handleIncomingReport(request, env, ctx);
         }
 
-        // --- LAYER 3: CORS Preflight ---
+        // --- LAYER 3: CORS Preflight (Safety for Browsers) ---
         if (request.method === "OPTIONS") {
             return new Response(null, {
                 headers: {
@@ -55,7 +66,7 @@ export default {
             });
         }
 
-        return new Response('Akula Node Active.', { status: 200 });
+        return new Response('Akula Node: System Active.', { status: 200 });
     }
 };
 
@@ -66,10 +77,10 @@ async function handleIncomingReport(request, env, ctx) {
         const clientId = data.clientId;
 
         if (!clientId || events.length === 0) {
-            return new Response('Invalid report.', { status: 400 });
+            return new Response('Invalid Payload', { status: 400 });
         }
 
-        // 1. LOG TO D1 (Your "Solid Data" for 45 days)
+        // Prepare batch statements for D1
         const statements = events.map(event => {
             const urlPath = new URL(event.url).pathname || "/";
             return env.DB.prepare(`
@@ -87,14 +98,9 @@ async function handleIncomingReport(request, env, ctx) {
             );
         });
 
-        // Execute D1 Batch
         await env.DB.batch(statements);
 
-        // 2. PUSH TO GOOGLE SHEETS (Live Signal Feed)
-        // We use ctx.waitUntil so the browser doesn't have to wait for Google Sheets to finish
-        ctx.waitUntil(pushToGoogleSheets(events, clientId, env));
-
-        return new Response('Processed.', { 
+        return new Response('Logged Successfully', { 
             status: 200, 
             headers: { "Access-Control-Allow-Origin": "*" } 
         });
@@ -102,70 +108,4 @@ async function handleIncomingReport(request, env, ctx) {
     } catch (e) {
         return new Response(`Error: ${e.message}`, { status: 500 });
     }
-}
-
-async function pushToGoogleSheets(events, clientId, env) {
-    try {
-        const token = await getGoogleToken(env);
-        // Note: You should have SPREADSHEET_ID in your wrangler.toml or secrets
-        const spreadsheetId = env.SPREADSHEET_ID; 
-
-        // Transform events into Enterprise Signal Rows
-        const rows = events.map(e => {
-            let severity = "🟡 MEDIUM";
-            let vector = "Heuristic Engine";
-            
-            if (e.type.includes('src_match') || e.type.includes('id_match')) {
-                severity = "🔴 HIGH";
-                vector = "Signature Match";
-            } else if (e.type.includes('global_var')) {
-                severity = "🔵 INFO";
-                vector = "Environment Scan";
-            }
-
-            return [
-                new Date(e.ts).toISOString().replace('T', ' ').substring(0, 19), // Time
-                severity,                                                      // Severity
-                vector,                                                        // Threat Vector
-                e.type.toUpperCase().replace(/_/g, ' '),                        // Signal
-                new URL(e.url).pathname,                                       // Resource Path
-                JSON.stringify(e.details).substring(0, 200)                    // Forensic Evidence
-            ];
-        });
-
-        // Google Sheets API: BatchUpdate to INSERT rows at the top (Prepend)
-        await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`, {
-            method: "POST",
-            headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
-            body: JSON.stringify({
-                requests: [
-                    {
-                        insertDimension: {
-                            range: { sheetId: 0, dimension: "ROWS", startIndex: 1, endIndex: 1 + rows.length },
-                            inheritFromBefore: false
-                        }
-                    },
-                    {
-                        updateCells: {
-                            rows: rows.map(r => ({
-                                values: r.map(v => ({ userEnteredValue: { stringValue: String(v) } }))
-                            })),
-                            fields: "userEnteredValue",
-                            start: { sheetId: 0, rowIndex: 1, columnIndex: 0 }
-                        }
-                    }
-                ]
-            })
-        });
-    } catch (err) {
-        console.error("Sheets Sync Failed:", err);
-    }
-}
-
-// Helper to get Google OAuth Token (Assumes you have service account credentials in env)
-async function getGoogleToken(env) {
-    // This part depends on your specific Auth setup (Service Account vs OAuth)
-    // For now, I'm assuming you have a functional getGoogleToken logic
-    // If not, let me know and I'll provide the Service Account Auth code.
-    return env.GOOGLE_ACCESS_TOKEN; 
 }
