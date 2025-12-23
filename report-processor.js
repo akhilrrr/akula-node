@@ -11,7 +11,7 @@ export default {
         if (request.method === "GET" && url.pathname === '/get-client-data') {
             const clientId = url.searchParams.get('clientId');
             const key = url.searchParams.get('key');
-            const SECRET_KEY = "thecakeisicy09"; // Must match your formula
+            const SECRET_KEY = "theCakeisicy09"; // Must match your formula
 
             if (key !== SECRET_KEY) {
                 return new Response("Unauthorized", { status: 401 });
